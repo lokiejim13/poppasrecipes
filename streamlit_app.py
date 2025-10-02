@@ -13,11 +13,11 @@ service = build('drive', 'v3', credentials=credentials)
 # Helper Functions
 # -------------------------
 def list_folders(parent_id):
-    st.warning(service.files().list())
     results = service.files().list(
         q=f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
         fields="files(id, name)"
     ).execute()
+    st.warning(results.get('files', []))
     return results.get('files', [])
 
 def list_files(parent_id):
