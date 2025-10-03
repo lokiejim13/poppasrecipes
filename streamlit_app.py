@@ -5,30 +5,26 @@ from googleapiclient.http import MediaIoBaseDownload
 from google.auth.transport.requests import Request
 from io import BytesIO
 from docx import Document
-import base64
 
 # -------------------------
-# Authenticate with service account
+# Service Account Auth
 # -------------------------
-SCOPES = ['https://www.googleapis.com/auth/drive.readonly']  # readonly is enough
-
-creds_dict = st.secrets["gcp_service_account"]  # or from JSON file
+SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+creds_dict = st.secrets["gcp_service_account"]
 credentials = service_account.Credentials.from_service_account_info(
     creds_dict,
     scopes=SCOPES
 )
 service = build('drive', 'v3', credentials=credentials)
 
-# -------------------------
-# Helper Functions
-# -------------------------
 def refresh_credentials():
-    """Ensure service account credentials are valid"""
     if not credentials.valid or credentials.expired:
         credentials.refresh(Request())
 
+# -------------------------
+# Drive helpers
+# -------------------------
 def list_folders(parent_id):
-    """List all subfolders under parent_id (with pagination)"""
     refresh_credentials()
     all_folders = []
     page_token = None
@@ -36,21 +32,22 @@ def list_folders(parent_id):
         results = service.files().list(
             q=f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
             fields="nextPageToken, files(id, name)",
-            pageToken=page_token
+            pageToken=page_token,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
         ).execute()
         all_folders.extend(results.get('files', []))
-        page_token = results.get('nextPageToken', None)
-        if page_token is None:
+        page_token = results.get('nextPageToken')
+        if not page_token:
             break
     return all_folders
 
 def list_files(parent_id):
-    """List all supported files under parent_id (with pagination)"""
     refresh_credentials()
     all_files = []
     mime_types = [
-        'application/vnd.google-apps.document',  # Google Docs
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',  # Word docx
+        'application/vnd.google-apps.document',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         'application/pdf'
     ]
     mime_query = " or ".join([f"mimeType='{m}'" for m in mime_types])
@@ -60,16 +57,17 @@ def list_files(parent_id):
         results = service.files().list(
             q=query,
             fields="nextPageToken, files(id, name, mimeType)",
-            pageToken=page_token
+            pageToken=page_token,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
         ).execute()
         all_files.extend(results.get('files', []))
-        page_token = results.get('nextPageToken', None)
-        if page_token is None:
+        page_token = results.get('nextPageToken')
+        if not page_token:
             break
     return all_files
 
 def traverse_folder(parent_id, path=""):
-    """Recursively traverse folders and return all files with paths"""
     items = []
     for folder in list_folders(parent_id):
         folder_path = f"{path}/{folder['name']}" if path else folder['name']
@@ -85,23 +83,21 @@ def traverse_folder(parent_id, path=""):
     return items
 
 # -------------------------
-# DOCX rendering functions
+# DOCX renderers
 # -------------------------
 def download_file_from_drive(file_id):
-    """Download file from Drive as bytes"""
     refresh_credentials()
-    request = service.files().get_media(fileId=file_id)
-    fh = BytesIO()
-    downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while not done:
-        try:
+    try:
+        request = service.files().get_media(fileId=file_id)
+        fh = BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
             status, done = downloader.next_chunk()
-        except Exception as e:
-            st.error(f"Failed to download file: {e}")
-            return None
-    fh.seek(0)
-    return fh.read()
+        fh.seek(0)
+        return fh.read()
+    except Exception:
+        return None
 
 def render_docx_to_html(file_bytes):
     doc = Document(BytesIO(file_bytes))
@@ -136,7 +132,6 @@ def render_docx_from_drive(file_id):
 def display_folder_tree(items):
     folder_map = {}
     file_map = {}
-
     for item in items:
         path_parts = item['path'].split('/')
         if len(path_parts) == 1:
