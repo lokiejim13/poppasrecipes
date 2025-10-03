@@ -17,7 +17,7 @@ if not st.session_state.logged_in:
     if st.button("Login"):
         if user_input == PASSWORD:
             st.session_state.logged_in = True
-            st.experimental_rerun()  # reload app as logged-in
+            st.rerun()  # reload app as logged-in
         else:
             st.error("❌ Incorrect password")
     st.stop()  # stop execution if not logged in
