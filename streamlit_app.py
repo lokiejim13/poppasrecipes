@@ -2,6 +2,7 @@ import streamlit as st
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
+from google.auth.transport.requests import Request
 from io import BytesIO
 from docx import Document
 import base64
@@ -16,8 +17,14 @@ service = build('drive', 'v3', credentials=credentials)
 # -------------------------
 # Helper Functions
 # -------------------------
+def refresh_credentials():
+    """Ensure service account credentials are valid"""
+    if not credentials.valid or credentials.expired:
+        credentials.refresh(Request())
+
 def list_folders(parent_id):
-    """List all subfolders under parent_id (handles pagination)"""
+    """List all subfolders under parent_id (with pagination)"""
+    refresh_credentials()
     all_folders = []
     page_token = None
     while True:
@@ -33,16 +40,16 @@ def list_folders(parent_id):
     return all_folders
 
 def list_files(parent_id):
-    """List all supported files under parent_id (handles pagination)"""
+    """List all supported files under parent_id (with pagination)"""
+    refresh_credentials()
     all_files = []
     mime_types = [
-        'application/vnd.google-apps.document',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.google-apps.document',  # Google Docs
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',  # Word docx
         'application/pdf'
     ]
     mime_query = " or ".join([f"mimeType='{m}'" for m in mime_types])
     query = f"'{parent_id}' in parents and trashed=false and ({mime_query})"
-
     page_token = None
     while True:
         results = service.files().list(
@@ -76,13 +83,18 @@ def traverse_folder(parent_id, path=""):
 # DOCX rendering functions
 # -------------------------
 def download_file_from_drive(file_id):
-    """Download file from Drive as bytes using MediaIoBaseDownload"""
+    """Download file from Drive as bytes"""
+    refresh_credentials()
     request = service.files().get_media(fileId=file_id)
     fh = BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
     done = False
     while not done:
-        status, done = downloader.next_chunk()
+        try:
+            status, done = downloader.next_chunk()
+        except Exception as e:
+            st.error(f"Failed to download file: {e}")
+            return None
     fh.seek(0)
     return fh.read()
 
@@ -104,26 +116,19 @@ def render_docx_to_html(file_bytes):
                     text = f"<i>{text}</i>"
                 paragraph_html += text
             html += f"<p>{paragraph_html}</p>"
-
-    # Inline images
-    for shape in doc.inline_shapes:
-        try:
-            image_stream = BytesIO()
-            shape._inline.graphic.graphicData.pic.blipFill.blip._blip.save(image_stream)
-            b64 = base64.b64encode(image_stream.getvalue()).decode()
-            html += f'<img src="data:image/png;base64,{b64}"><br>'
-        except Exception:
-            continue
     return html
 
 def render_docx_from_drive(file_id):
     file_bytes = download_file_from_drive(file_id)
-    return render_docx_to_html(file_bytes)
+    if file_bytes:
+        return render_docx_to_html(file_bytes)
+    else:
+        return "<p style='color:red'>Cannot render file — access denied or download failed.</p>"
 
 # -------------------------
 # Folder tree display
 # -------------------------
-def display_folder_tree(items, parent_path=""):
+def display_folder_tree(items):
     folder_map = {}
     file_map = {}
 
@@ -155,9 +160,10 @@ def display_folder_tree(items, parent_path=""):
                 file_url = f"https://drive.google.com/uc?id={file_item['id']}&export=download"
                 st.markdown(f"[Open PDF]({file_url})")
             elif mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-                st.info("Rendering Word document:")
                 html = render_docx_from_drive(file_item['id'])
                 st.markdown(html, unsafe_allow_html=True)
+            else:
+                st.warning("File type not supported.")
 
 # -------------------------
 # Streamlit App
@@ -165,10 +171,15 @@ def display_folder_tree(items, parent_path=""):
 st.title("🍴 Poppa's Recipe Viewer")
 
 MAIN_FOLDER_ID = "1mO6EhBkG_lBbG2D5m8gUKHr4PftNXvds"  # BrianKellyRecipes
-all_recipes = traverse_folder(MAIN_FOLDER_ID)
+
+try:
+    all_recipes = traverse_folder(MAIN_FOLDER_ID)
+except Exception as e:
+    st.error(f"Failed to load folders/files: {e}")
+    all_recipes = []
 
 if not all_recipes:
-    st.warning("No recipes found!")
+    st.warning("No recipes found or some folders are inaccessible to the service account!")
 else:
     st.info("Browse recipes by folder:")
     display_folder_tree(all_recipes)
