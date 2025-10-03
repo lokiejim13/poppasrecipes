@@ -165,7 +165,7 @@ def display_folder_tree(items):
                     unsafe_allow_html=True
                 )
             elif mime_type == 'application/pdf':
-                file_url = f"https://drive.google.com/uc?id={file_item["id"]}&export=download"
+                file_url = f"https://drive.google.com/uc?id={file_item['id']}&export=download"
                 st.markdown(f"[Open PDF]({file_url})")
             elif mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
                 html = render_docx_from_drive(file_item['id'])
