@@ -1,7 +1,7 @@
 import streamlit as st
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-import requests
+from googleapiclient.http import MediaIoBaseDownload
 from io import BytesIO
 from docx import Document
 import base64
@@ -17,13 +17,24 @@ service = build('drive', 'v3', credentials=credentials)
 # Helper Functions
 # -------------------------
 def list_folders(parent_id):
-    results = service.files().list(
-        q=f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
-        fields="files(id, name)"
-    ).execute()
-    return results.get('files', [])
+    """List all subfolders under parent_id (handles pagination)"""
+    all_folders = []
+    page_token = None
+    while True:
+        results = service.files().list(
+            q=f"'{parent_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false",
+            fields="nextPageToken, files(id, name)",
+            pageToken=page_token
+        ).execute()
+        all_folders.extend(results.get('files', []))
+        page_token = results.get('nextPageToken', None)
+        if page_token is None:
+            break
+    return all_folders
 
 def list_files(parent_id):
+    """List all supported files under parent_id (handles pagination)"""
+    all_files = []
     mime_types = [
         'application/vnd.google-apps.document',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -31,13 +42,22 @@ def list_files(parent_id):
     ]
     mime_query = " or ".join([f"mimeType='{m}'" for m in mime_types])
     query = f"'{parent_id}' in parents and trashed=false and ({mime_query})"
-    results = service.files().list(
-        q=query,
-        fields="files(id, name, mimeType)"
-    ).execute()
-    return results.get('files', [])
+
+    page_token = None
+    while True:
+        results = service.files().list(
+            q=query,
+            fields="nextPageToken, files(id, name, mimeType)",
+            pageToken=page_token
+        ).execute()
+        all_files.extend(results.get('files', []))
+        page_token = results.get('nextPageToken', None)
+        if page_token is None:
+            break
+    return all_files
 
 def traverse_folder(parent_id, path=""):
+    """Recursively traverse folders and return all files with paths"""
     items = []
     for folder in list_folders(parent_id):
         folder_path = f"{path}/{folder['name']}" if path else folder['name']
@@ -51,6 +71,20 @@ def traverse_folder(parent_id, path=""):
             "mimeType": file['mimeType']
         })
     return items
+
+# -------------------------
+# DOCX rendering functions
+# -------------------------
+def download_file_from_drive(file_id):
+    """Download file from Drive as bytes using MediaIoBaseDownload"""
+    request = service.files().get_media(fileId=file_id)
+    fh = BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+    fh.seek(0)
+    return fh.read()
 
 def render_docx_to_html(file_bytes):
     doc = Document(BytesIO(file_bytes))
@@ -71,7 +105,7 @@ def render_docx_to_html(file_bytes):
                 paragraph_html += text
             html += f"<p>{paragraph_html}</p>"
 
-    # Images
+    # Inline images
     for shape in doc.inline_shapes:
         try:
             image_stream = BytesIO()
@@ -83,15 +117,16 @@ def render_docx_to_html(file_bytes):
     return html
 
 def render_docx_from_drive(file_id):
-    url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
-    headers = {"Authorization": f"Bearer {credentials.token}"}
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
-    return render_docx_to_html(response.content)
+    file_bytes = download_file_from_drive(file_id)
+    return render_docx_to_html(file_bytes)
 
+# -------------------------
+# Folder tree display
+# -------------------------
 def display_folder_tree(items, parent_path=""):
     folder_map = {}
     file_map = {}
+
     for item in items:
         path_parts = item['path'].split('/')
         if len(path_parts) == 1:
@@ -101,12 +136,12 @@ def display_folder_tree(items, parent_path=""):
             remaining_path = '/'.join(path_parts[1:])
             folder_map.setdefault(folder_name, []).append({**item, 'path': remaining_path})
 
-    # Folders
+    # Display folders
     for folder_name, folder_items in folder_map.items():
         with st.expander(f"📁 {folder_name}", expanded=False):
             display_folder_tree(folder_items)
 
-    # Files
+    # Display files
     for file_name, file_item in file_map.items():
         if st.button(f"📄 {file_item['name']}", key=file_item['id']):
             mime_type = file_item['mimeType']
@@ -129,7 +164,7 @@ def display_folder_tree(items, parent_path=""):
 # -------------------------
 st.title("🍴 Poppa's Recipe Viewer")
 
-MAIN_FOLDER_ID = "1mO6EhBkG_lBbG2D5m8gUKHr4PftNXvds"
+MAIN_FOLDER_ID = "1mO6EhBkG_lBbG2D5m8gUKHr4PftNXvds"  # BrianKellyRecipes
 all_recipes = traverse_folder(MAIN_FOLDER_ID)
 
 if not all_recipes:
