@@ -88,7 +88,7 @@ def display_folder_tree(items):
 # -------------------------
 # Streamlit App
 # -------------------------
-st.title("🍴 Poppa's Recipe Viewer")
+st.title("🍴 Poppa's Recipes")
 
 MAIN_FOLDER_ID = "1mO6EhBkG_lBbG2D5m8gUKHr4PftNXvds"
 
