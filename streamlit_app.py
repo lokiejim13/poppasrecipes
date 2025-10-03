@@ -10,8 +10,13 @@ import base64
 # -------------------------
 # Authenticate with service account
 # -------------------------
-creds_dict = st.secrets["gcp_service_account"]
-credentials = service_account.Credentials.from_service_account_info(creds_dict)
+SCOPES = ['https://www.googleapis.com/auth/drive.readonly']  # readonly is enough
+
+creds_dict = st.secrets["gcp_service_account"]  # or from JSON file
+credentials = service_account.Credentials.from_service_account_info(
+    creds_dict,
+    scopes=SCOPES
+)
 service = build('drive', 'v3', credentials=credentials)
 
 # -------------------------
